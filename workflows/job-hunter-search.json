@@ -1,0 +1,617 @@
+{
+  "name": "Job Hunter: Suche",
+  "nodes": [
+    {
+      "id": "d94a0fec-a88c-5785-b02f-9a5ffd3bc2de",
+      "name": "Täglich 07:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 7 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "6ba0ab87-fa24-5281-98f3-146c09c4952b",
+      "name": "Manuell",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "8e8fc3dd-b7e4-52fc-b9ac-254b21036548",
+      "name": "Jetzt suchen (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "jobhunter-run-<random>",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "1bac3b69-6ea5-5682-a9c8-8821f4f13e88"
+    },
+    {
+      "id": "cfefd565-d7e5-5471-8596-bba92f69a248",
+      "name": "Config & Suchen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Единственное место с настройками поиска.\n// Разовый прогон: POST на вебхук с телом {\"days\": 30, \"max_eval\": 90, \"ignore_seen\": true}.\n// ignore_seen — прислать заново и уже виденные вакансии (записи в таблице не удаляются).\nconst ov = $input.first().json.body ?? {};\nconst cfg = {\n  plz: '10115',\n  umkreis_km: 40,\n  homeoffice_min: 80,    // «удалёнка» = хоумофис от 80% времени\n  days: Number(ov.days) || 2,  // вакансии, опубликованные за последние N дней\n  ignore_seen: ov.ignore_seen === true,\n  max_eval: Number(ov.max_eval) || 40,  // потолок оценок ИИ за один прогон\n  min_score: 6,          // ниже — в Telegram не присылаем, только в таблицу\n  model: 'gpt-4o',\n  chat_id: '000000000',\n};\n\n// Подобраны прогоном по живому API за 30 дней (2026-09-11). Выкинуты те, что\n// приносили в основном мусор: Make.com, Zapier, Quereinsteiger IT, Schnittstellen,\n// Integration/Automation Engineer (промышленность и senior), Chatbot.\nconst keywords = [\n  'n8n', 'Prozessautomatisierung', 'KI Automatisierung', 'Workflow Automatisierung',\n  'Low-Code', 'No-Code', 'RPA', 'Prozessdigitalisierung', 'Digitalisierung Prozesse',\n  'Digitalisierungsmanager', 'KI-Manager', 'KI Prozesse', 'Power Automate',\n  'Python Automatisierung', 'Prompt Engineer', 'Business Process Automation',\n];\n\nconst base = 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs';\nconst qs = (o) => Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');\n\nconst out = [];\nfor (const was of keywords) {\n  // angebotsart=1 — только работа (без стажировок, Ausbildung и самозанятости)\n  const common = { was, angebotsart: 1, veroeffentlichtseit: cfg.days, size: 50, page: 1 };\n  out.push({ json: { cfg, was, mode: 'local',\n    url: base + '?' + qs({ ...common, wo: cfg.plz, umkreis: cfg.umkreis_km }) } });\n  out.push({ json: { cfg, was, mode: 'remote',\n    url: base + '?' + qs({ ...common, homeoffice: 'prozentual_' + cfg.homeoffice_min }) } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "cfc1d08a-b628-55f6-a356-1d7003cafc93",
+      "name": "BA Suche",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        100
+      ],
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "jobboerse-jobsuche"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (NikitaJobs)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 500
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "83a3c681-c217-55a9-820e-390d57be9ca4",
+      "name": "Sammeln & Vorfiltern",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Склеиваем ответы всех запросов, убираем повторы и явно не наши профессии.\nconst queries = $('Config & Suchen').all();\nconst cfg = queries[0].json.cfg;\n\n// Отсев по заголовку: промышленная автоматизация, учёба, руководящие роли.\nconst EXCLUDE = /(elektron|elektrik|mechatron|instandhalt|\\bsps\\b|schlosser|monteur|servicetechn|techniker|embedded|hardware|werkstudent|praktik|ausbildung|dual|abschlussarbeit|thesis|minijob|fahrer|lager|pflege|erzieher|verkäufer|recruiter|personalberater|senior|lead\\b|head of|leiter|principal|director|chief)/i;\n\nconst byRef = new Map();\nlet raw = 0, excluded = 0;\n$input.all().forEach((it, i) => {\n  const mode = queries[i]?.json.mode ?? 'local';\n  for (const j of it.json.ergebnisliste ?? []) {\n    raw++;\n    const refnr = j.referenznummer;\n    if (!refnr) continue;\n    const title = j.stellenangebotsTitel ?? '';\n    if (EXCLUDE.test(title)) { excluded++; continue; }\n    const prev = byRef.get(refnr);\n    if (prev) { if (mode === 'remote') prev.mode = 'remote'; continue; }\n    byRef.set(refnr, {\n      refnr, title, mode,\n      firma: j.firma ?? '',\n      ort: (j.stellenlokationen ?? [])[0]?.adresse?.ort ?? '',\n      published: j.datumErsteVeroeffentlichung ?? '',\n    });\n  }\n});\n\nconst jobs = [...byRef.values()];\nreturn [{ json: { cfg, jobs, stats: { raw, excluded, unique: jobs.length } } }];\n"
+      }
+    },
+    {
+      "id": "5912cafd-1f82-5beb-83f4-288050fea513",
+      "name": "Bekannte Stellen",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        100
+      ],
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: job_seen>"
+        },
+        "returnAll": true,
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "202b6113-b18f-582a-84ca-8ac45578468a",
+      "name": "Nur neue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ],
+      "parameters": {
+        "jsCode": "// Оставляем только вакансии, которых ещё нет в таблице job_seen.\nconst { cfg, jobs, stats } = $('Sammeln & Vorfiltern').first().json;\nconst seen = new Set(cfg.ignore_seen ? [] : $input.all().map((it) => it.json.refnr).filter(Boolean));\nconst fresh = jobs.filter((j) => !seen.has(j.refnr));\n\n// Удалёнку показываем первой, потом — самое свежее.\nfresh.sort((a, b) => (a.mode === b.mode ? b.published.localeCompare(a.published) : a.mode === 'remote' ? -1 : 1));\nconst picked = fresh.slice(0, cfg.max_eval);\nconst summary = { ...stats, fresh: fresh.length, evaluated: picked.length };\n\nif (!picked.length) return [{ json: { none: true, cfg, summary } }];\n\nconst b64 = (s) => (typeof btoa === 'function' ? btoa(s) : Buffer.from(s).toString('base64'));\nreturn picked.map((j) => ({ json: { ...j, refnr_b64: b64(j.refnr), cfg, summary } }));\n"
+      }
+    },
+    {
+      "id": "c3e7198d-5535-5f90-ad53-20daa6a0a79a",
+      "name": "Gibt es neue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "hasnew",
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              },
+              "leftValue": "={{ $json.none === true }}",
+              "rightValue": true
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "55e605a8-60d7-5828-a21e-434e0b38be77",
+      "name": "Keine neuen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const { cfg, summary } = $input.first().json;\nreturn [{ json: { method: 'sendMessage', body: { chat_id: cfg.chat_id,\n  text: `🔎 Сегодня новых вакансий нет.\\nПросмотрено: ${summary.raw}, после фильтра: ${summary.unique}.` } } }];\n"
+      }
+    },
+    {
+      "id": "702487dd-6f1b-5016-ba33-5d0230b8fcbe",
+      "name": "BA Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1540,
+        0
+      ],
+      "parameters": {
+        "url": "=https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails/{{ $json.refnr_b64 }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "jobboerse-jobsuche"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (NikitaJobs)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000,
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 500
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "862c464e-d5ea-56b5-a8d9-8f3fd95ec21b",
+      "name": "Prompt bauen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Готовим запрос к модели: профиль кандидата + полный текст вакансии.\nconst job = $('Nur neue').item.json;\nconst d = $json ?? {};\nconst text = String(d.stellenangebotsBeschreibung ?? '').slice(0, 5000);\nconst url = d.externeURL || `https://www.arbeitsagentur.de/jobsuche/jobdetail/${job.refnr}`;\nconst salary = d.gehaltsspanneVon ? `${d.gehaltsspanneVon}–${d.gehaltsspanneBis ?? '?'} € (${d.verguetungsangabe ?? ''})` : '';\nconst email = (text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i) ?? [null])[0];\n\nconst profile = `Kandidat: Max Mustermann, wohnt in 10115 Berlin. Verfügbar: Vollzeit, ab sofort.\nWerdegang: Quereinsteiger, seit 2026 freiberuflich in der Workflow-Automatisierung.\nSprachen: Deutsch C1, Englisch B1.\nProjekte:\n- Beispielprojekt: n8n-Workflow, der Rechnungen automatisch erstellt und versendet.\nWerkzeuge: n8n, Python, REST APIs, Webhooks.\nNicht vorhanden: Informatikstudium.\nSucht: Junior-Stelle in der Automatisierung, vor Ort oder remote.`;\n\nconst system = `Du bewertest Stellenanzeigen für genau einen Kandidaten. Die Frage ist: Lohnt sich eine Bewerbung — hat er eine realistische Chance auf ein Vorstellungsgespräch? Nicht: erfüllt er jede Anforderung. Deutsche Anzeigen sind Wunschlisten; Formulierungen wie \"idealerweise\", \"wünschenswert\", \"oder vergleichbar\" sind keine Ausschlussgründe.\nEhrlich bleiben: hohe Punktzahl nur, wenn der Kern der Arbeit Automatisierung, Workflows, Integrationen, Digitalisierung von Prozessen oder KI-Einsatz ist.\nSkala: 9-10 = passt fast perfekt; 7-8 = gute Chance, kleine Lücken; 5-6 = möglich, Bewerbung lohnt sich mit gutem Anschreiben; 0-4 = passt nicht (anderes Fachgebiet wie Buchhaltung/Vertrieb/Technik, Industrieautomatisierung/SPS, harte Pflicht zu mehrjähriger Berufserfahrung oder Informatikstudium, verhandlungssicheres Englisch als Arbeitssprache).\nAntworte NUR mit JSON:\n{\"score\": 0-10, \"fit_ru\": \"1-2 Sätze auf RUSSISCH: warum passt es oder nicht\", \"pros\": [\"bis zu 3 kurze Punkte auf Russisch\"], \"cons\": [\"bis zu 3 kurze Punkte auf Russisch\"], \"english_required\": true|false, \"remote\": \"vollständig|teilweise|nein|unklar\"}`;\n\nconst user = `KANDIDAT:\\n${profile}\\n\\nSTELLE:\\nTitel: ${job.title}\\nFirma: ${job.firma}\\nOrt: ${job.ort}\\n${salary ? 'Gehalt: ' + salary + '\\n' : ''}Arbeitnehmerüberlassung: ${d.istArbeitnehmerUeberlassung ? 'ja' : 'nein'}\\n\\n${text || '(keine Beschreibung verfügbar – bewerte nur nach Titel, vorsichtig)'}`;\n\nreturn {\n  json: {\n    job: { ...job, url, salary, email, zeitarbeit: !!d.istArbeitnehmerUeberlassung, has_text: !!text },\n    openai_request: {\n      model: job.cfg.model,\n      temperature: 0.2,\n      max_tokens: 500,\n      response_format: { type: 'json_object' },\n      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "abce9160-de55-5089-bb6b-d17ca03e45fc",
+      "name": "KI-Bewertung",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1980,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.openai_request) }}",
+        "options": {
+          "timeout": 40000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 6500
+            }
+          }
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "<n8n credential id: OpenAI>",
+          "name": "OpenAi account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "30f292a5-9e02-5396-8596-6a6d391ff1dc",
+      "name": "Auswerten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Разбираем ответ модели. Если модель упала или прислала мусор — score = -1,\n// вакансия всё равно попадает в таблицу, чтобы не оценивать её каждый день заново.\nconst job = $('Prompt bauen').item.json.job;\nlet r = {};\ntry { r = JSON.parse($json.choices?.[0]?.message?.content ?? '{}'); } catch (e) { r = {}; }\nconst score = Number.isFinite(Number(r.score)) ? Math.max(0, Math.min(10, Math.round(Number(r.score)))) : -1;\nreturn {\n  json: {\n    ...job,\n    score,\n    fit_ru: String(r.fit_ru ?? (score < 0 ? 'Оценка не удалась' : '')),\n    pros: Array.isArray(r.pros) ? r.pros.slice(0, 3).map(String) : [],\n    cons: Array.isArray(r.cons) ? r.cons.slice(0, 3).map(String) : [],\n    english_required: r.english_required === true,\n    remote: String(r.remote ?? 'unklar'),\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      }
+    },
+    {
+      "id": "fe83371e-a5a0-5dee-b7f4-1237a92fa7c4",
+      "name": "Merken",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2640,
+        200
+      ],
+      "parameters": {
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: job_seen>"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "refnr": "={{ $json.refnr }}",
+            "title": "={{ $json.title }}",
+            "firma": "={{ $json.firma }}",
+            "ort": "={{ $json.ort }}",
+            "mode": "={{ $json.mode }}",
+            "score": "={{ $json.score }}",
+            "status": "={{ $json.score >= $json.cfg.min_score ? 'sent' : 'skipped' }}",
+            "url": "={{ $json.url }}",
+            "found_at": "={{ $now.toISO() }}",
+            "fit_ru": "={{ $json.fit_ru }}"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "9da7552a-2953-507f-a009-4e44a92bdb1d",
+      "name": "Nur bewertete",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "scored",
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              },
+              "leftValue": "={{ $json.score }}",
+              "rightValue": 0
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "06089569-659d-5e4a-9898-26e352c5c445",
+      "name": "Karten bauen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        -100
+      ],
+      "parameters": {
+        "jsCode": "// Сводка первым сообщением (с коротким списком «возможно» на 5/10),\n// затем карточки подходящих вакансий с кнопками — от лучших к худшим.\nconst all = $input.all().map((it) => it.json);\nconst cfg = all[0].cfg;\nconst s = all[0].summary;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst good = all.filter((j) => j.score >= cfg.min_score).sort((a, b) => b.score - a.score);\nconst maybe = all.filter((j) => j.score === cfg.min_score - 1);\nconst failed = all.filter((j) => j.score < 0).length;\n\nconst head = [\n  `🔎 <b>Вакансии на ${$now.setZone('Europe/Berlin').toFormat('dd.MM')}</b>`,\n  `Найдено ${s.raw}, после фильтра ${s.unique}, новых ${s.fresh}, оценено ${s.evaluated}.`,\n  good.length ? `Подходящих (≥${cfg.min_score}/10): <b>${good.length}</b> 👇` : `Подходящих (≥${cfg.min_score}/10) сегодня нет.`,\n  failed ? `⚠️ Не удалось оценить: ${failed} — попробую завтра снова.` : '',\n  s.fresh > s.evaluated ? `ℹ️ Ещё ${s.fresh - s.evaluated} новых отложено на завтра (лимит ${cfg.max_eval}).` : '',\n  maybe.length ? `\\n🤔 <b>Возможно (${cfg.min_score - 1}/10):</b>\\n` + maybe.slice(0, 10).map((j) =>\n    `• <a href=\"${esc(j.url)}\">${esc(j.title)}</a> — ${esc(j.firma)}${j.mode === 'remote' ? ' · 🏠' : ''}`).join('\\n') : '',\n].filter(Boolean).join('\\n');\n\nconst dot = (n) => (n >= 8 ? '🟢' : n >= 7 ? '🟡' : '🟠');\nconst place = (j) => (j.mode === 'remote' || j.remote === 'vollständig' ? '🏠 удалёнка' : j.remote === 'teilweise' ? '🏠 частично удалённо' : '📍 на месте');\n\nconst msg = (text, reply_markup) => ({ json: { method: 'sendMessage', body: {\n  chat_id: cfg.chat_id, text: text.slice(0, 4000), parse_mode: 'HTML',\n  disable_web_page_preview: true, ...(reply_markup ? { reply_markup } : {}) } } });\n\nconst cards = good.map((j) => msg([\n  `${dot(j.score)} <b>${j.score}/10 · ${esc(j.title)}</b>`,\n  `🏢 ${esc(j.firma)} · ${esc(j.ort)} · ${place(j)}`,\n  j.salary ? `💶 ${esc(j.salary)}` : '',\n  '',\n  `💬 ${esc(j.fit_ru)}`,\n  ...j.pros.map((p) => `✅ ${esc(p)}`),\n  ...j.cons.map((c) => `⚠️ ${esc(c)}`),\n  j.english_required ? '🇬🇧 нужен английский' : '',\n  j.zeitarbeit ? '🔁 Zeitarbeit (через кадровое агентство)' : '',\n  j.email ? '📧 в тексте есть e-mail для отклика' : '',\n].join('\\n').replace(/\\n{3,}/g, '\\n\\n'), { inline_keyboard: [\n  [{ text: '✍️ Написать Anschreiben', callback_data: 'w:' + j.refnr }],\n  [{ text: '🔗 Вакансия', url: j.url }, { text: '❌ Не интересно', callback_data: 'x:' + j.refnr }],\n] }));\n\nreturn [msg(head), ...cards];\n"
+      }
+    },
+    {
+      "id": "672cfb1c-fb2c-5d36-80be-d5873f48f21e",
+      "name": "An Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2640,
+        -100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot__TG_TOKEN__/{{ $json.method }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Connection",
+              "value": "close"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 8000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 400
+            }
+          }
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Täglich 07:30": {
+      "main": [
+        [
+          {
+            "node": "Config & Suchen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manuell": {
+      "main": [
+        [
+          {
+            "node": "Config & Suchen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jetzt suchen (Webhook)": {
+      "main": [
+        [
+          {
+            "node": "Config & Suchen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config & Suchen": {
+      "main": [
+        [
+          {
+            "node": "BA Suche",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BA Suche": {
+      "main": [
+        [
+          {
+            "node": "Sammeln & Vorfiltern",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sammeln & Vorfiltern": {
+      "main": [
+        [
+          {
+            "node": "Bekannte Stellen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bekannte Stellen": {
+      "main": [
+        [
+          {
+            "node": "Nur neue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nur neue": {
+      "main": [
+        [
+          {
+            "node": "Gibt es neue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gibt es neue?": {
+      "main": [
+        [
+          {
+            "node": "BA Details",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Keine neuen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keine neuen": {
+      "main": [
+        [
+          {
+            "node": "An Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BA Details": {
+      "main": [
+        [
+          {
+            "node": "Prompt bauen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt bauen": {
+      "main": [
+        [
+          {
+            "node": "KI-Bewertung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KI-Bewertung": {
+      "main": [
+        [
+          {
+            "node": "Auswerten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auswerten": {
+      "main": [
+        [
+          {
+            "node": "Nur bewertete",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Karten bauen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nur bewertete": {
+      "main": [
+        [
+          {
+            "node": "Merken",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Karten bauen": {
+      "main": [
+        [
+          {
+            "node": "An Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin"
+  }
+}

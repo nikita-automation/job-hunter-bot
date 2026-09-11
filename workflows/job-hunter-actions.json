@@ -1,0 +1,1303 @@
+{
+  "name": "Job Hunter: Aktionen",
+  "nodes": [
+    {
+      "id": "8586f345-8c12-5fc6-b985-68bf5b1b2a31",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "<n8n credential id: Telegram bot>",
+          "name": "NikitaJobs Bot"
+        }
+      },
+      "webhookId": "ccf4b70d-3d21-5c93-a39c-02618e8c74d8"
+    },
+    {
+      "id": "262e6ee3-7783-555d-9466-287171235156",
+      "name": "Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Входящий апдейт Telegram → одно действие. Чужие чаты игнорируем.\nconst OWNER = '000000000';\nconst u = $input.first().json;\nconst b64 = (s) => (typeof btoa === 'function' ? btoa(s) : Buffer.from(s).toString('base64'));\nconst urlOf = (m) => ((m?.reply_markup?.inline_keyboard ?? []).flat().find((b) => b.url) ?? {}).url ?? '';\nlet r = { action: 'ignore' };\n\nif (u.callback_query) {\n  const cq = u.callback_query;\n  const data = String(cq.data ?? '');\n  const i = data.indexOf(':');\n  const k = i > 0 ? data.slice(0, i) : data;\n  const map = { w: 'write', r: 'write', x: 'reject', s: 'confirm_send', S: 'send', c: 'cancel_send', a: 'applied' };\n  const tips = { write: '✍️ Пишу письмо, ~20 секунд…', reject: 'Скрыл', confirm_send: 'Проверь адрес и подтверди',\n                 send: '📤 Отправляю…', cancel_send: 'Отменено', applied: '✅ Записал в отклики' };\n  r = { action: map[k] ?? 'noop', rewrite: k === 'r', refnr: i > 0 ? data.slice(i + 1) : '',\n        chat_id: String(cq.message?.chat?.id ?? ''), msg_id: cq.message?.message_id,\n        msg_text: cq.message?.text ?? '', url: urlOf(cq.message), cb_id: cq.id, cb_text: tips[map[k]] ?? '' };\n} else if (u.message) {\n  const m = u.message;\n  const text = String(m.text ?? '').trim();\n  const rep = m.reply_to_message;\n  const ref = ((rep?.text ?? '').match(/#ref\\s+(\\S+)/) ?? [])[1];\n  const base = { chat_id: String(m.chat?.id ?? '') };\n  if (ref && text) r = { ...base, action: 'write', refnr: ref, instruction: text, msg_text: rep.text, url: urlOf(rep) };\n  else if (/^\\/bewerbungen/i.test(text)) r = { ...base, action: 'list' };\n  else if (/^\\/suche/i.test(text)) r = { ...base, action: 'search' };\n  else r = { ...base, action: 'help' };\n}\n\nif (r.chat_id !== OWNER) r = { action: 'ignore' };\nif (r.refnr) r.refnr_b64 = b64(r.refnr);\n\n// Данные письма берём из текста уже присланного сообщения с Anschreiben.\nconst t = r.msg_text ?? '';\nr.to = (t.match(/Кому:\\s*(\\S+@\\S+)/) ?? [])[1] ?? '';\nr.subject = ((t.match(/Betreff:\\s*(.+)/) ?? [])[1] ?? '').trim();\nconst parts = t.split('———');\nr.letter = parts.length >= 3 ? parts[1].trim() : '';\nconst head = t.split('\\n')[0] ?? '';\nconst hm = head.match(/Anschreiben · (.+) — (.+)$/);\nr.head_title = ((hm ?? head.match(/\\d+\\/10 · (.+)$/) ?? [])[1] ?? '').trim();\nr.head_firma = (hm?.[2] ?? '').trim();\nreturn [{ json: r }];\n"
+      }
+    },
+    {
+      "id": "8f036193-abb0-5c51-b985-d5707997fea0",
+      "name": "Quittung",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        160
+      ],
+      "parameters": {
+        "jsCode": "// Ответ на нажатие кнопки, иначе у Никиты крутятся «часики».\nconst r = $input.first().json;\nif (!r.cb_id) return [];\nreturn [{ json: { method: 'answerCallbackQuery', body: { callback_query_id: r.cb_id, text: r.cb_text } } }];\n"
+      }
+    },
+    {
+      "id": "bc2b688b-905a-5c34-b37d-65ad382a923f",
+      "name": "Callback beantworten",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot__TG_TOKEN__/{{ $json.method }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Connection",
+              "value": "close"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 8000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "67bc0d3e-f8a0-51f1-9d22-80a95b407025",
+      "name": "Aktion",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        440,
+        400
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "write",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "write"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "write"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "reject",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "reject"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "reject"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "confirm_send",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "confirm_send"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "confirm_send"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "send",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "send"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "send"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "cancel_send",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "cancel_send"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "cancel_send"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "applied",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "applied"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "applied"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "list",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "list"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "list"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "search",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "search"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "search"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "version": 2,
+                  "typeValidation": "strict"
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "help"
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "9d2e9915-bb6b-5212-bebd-40537f28b3d9",
+      "name": "Telegram API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2860,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot__TG_TOKEN__/{{ $json.method }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Connection",
+              "value": "close"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 8000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "ffa35dba-77ec-58c1-a4db-c0c15fe8a355",
+      "name": "Stelle (Details)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        -200
+      ],
+      "parameters": {
+        "url": "=https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails/{{ $json.refnr_b64 }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "jobboerse-jobsuche"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (NikitaJobs)"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "5bd06d74-8e66-5a05-a371-c3cbd05b7bfd",
+      "name": "Brief-Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\n// Промпт для письма: профиль + вакансия (+ пожелание Никиты при переписывании).\nconst d = $input.first().json ?? {};\nconst text = String(d.stellenangebotsBeschreibung ?? '').slice(0, 6000);\nconst title = d.stellenangebotsTitel || R.head_title || '(Titel unbekannt)';\nconst firma = d.firma ?? '';\nconst ort = (d.stellenlokationen ?? [])[0]?.adresse?.ort ?? '';\nconst url = R.url || d.externeURL || `https://www.arbeitsagentur.de/jobsuche/jobdetail/${R.refnr}`;\nconst emails = [...new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi) ?? []).map((e) => e.toLowerCase()))];\n\nlet user = `KANDIDAT:\\n${\"Kandidat: Max Mustermann, wohnt in 10115 Berlin. Verfügbar: Vollzeit, ab sofort.\\nWerdegang: Quereinsteiger, seit 2026 freiberuflich in der Workflow-Automatisierung.\\nSprachen: Deutsch C1, Englisch B1.\\nProjekte:\\n- Beispielprojekt: n8n-Workflow, der Rechnungen automatisch erstellt und versendet.\\nWerkzeuge: n8n, Python, REST APIs, Webhooks.\\nNicht vorhanden: Informatikstudium.\\nSucht: Junior-Stelle in der Automatisierung, vor Ort oder remote.\"}\\n\\nSTELLE:\\nTitel: ${title}\\nFirma: ${firma}\\nOrt: ${ort}\\n` +\n  `Gefundene E-Mail-Adressen: ${emails.join(', ') || 'keine'}\\n\\n` +\n  (text || '(Beschreibung nicht verfügbar — allgemeiner schreiben, nur Titel und Firma verwenden)');\nif (R.instruction) user += `\\n\\nBISHERIGES ANSCHREIBEN:\\n${R.letter}\\n\\nÄNDERUNGSWUNSCH DES KANDIDATEN (evtl. auf Russisch): ${R.instruction}\\nÜberarbeite das Anschreiben genau so. Alle Regeln gelten weiter.`;\nelse if (R.rewrite && R.letter) user += `\\n\\nBISHERIGES ANSCHREIBEN:\\n${R.letter}\\n\\nSchreibe eine spürbar andere Variante (anderer Einstieg, andere Projektauswahl oder Gewichtung).`;\n\nreturn [{ json: {\n  job: { refnr: R.refnr, title, firma, url, emails },\n  openai_request: { model: 'gpt-4o', temperature: 0.6, max_tokens: 1200, response_format: { type: 'json_object' },\n    messages: [{ role: 'system', content: \"Du schreibst ein Anschreiben für eine E-Mail-Bewerbung auf Deutsch für den Kandidaten.\\nRegeln:\\n- Verwende NUR Fakten aus dem Profil. Nichts erfinden: keine Jahre Erfahrung, keine Tools, Abschlüsse, Kunden oder Zahlen, die nicht im Profil stehen. Englisch nicht besser darstellen als A2.\\n- 170–260 Wörter, 3–4 kurze Absätze. Natürlicher, selbstbewusster, aber bescheidener Ton. Keine Floskeln wie \\\"hiermit bewerbe ich mich\\\", \\\"mit großem Interesse\\\", \\\"teamfähig und motiviert\\\", \\\"dynamisches Team\\\", \\\"reizt mich besonders\\\", \\\"bewiesen, wie effektiv\\\", \\\"Vielen Dank für die Berücksichtigung\\\". Lieber konkret als werbend.\\n- Einstieg: konkreter Bezug auf die Firma oder eine Aufgabe aus der Anzeige.\\n- Mitte: 1–2 Projekte aus dem Profil, die am besten zu den Aufgaben passen, mit konkretem Ergebnis, und die Brücke zu den Anforderungen.\\n- Den Quereinstieg (Koch → Automatisierung) kurz als Stärke zeigen, wenn es passt (Prozessdenken, Arbeiten unter Zeitdruck, Zuverlässigkeit) — nicht entschuldigen.\\n- Verlangt die Anzeige einen Eintrittstermin: \\\"ab sofort\\\". Verlangt sie eine Gehaltsvorstellung: Platzhalter [Gehaltsvorstellung ergänzen].\\n- Anrede: Ist eine Ansprechperson genannt, \\\"Sehr geehrte Frau …\\\" bzw. \\\"Sehr geehrter Herr …\\\", sonst \\\"Sehr geehrte Damen und Herren,\\\".\\n- KEINE Grußformel und keine Signatur am Ende — die werden automatisch angehängt.\\nAntworte NUR mit JSON:\\n{\\\"betreff\\\": \\\"Bewerbung als <Stellentitel> – Mykyta Rozumnyi\\\", \\\"anschreiben\\\": \\\"Text, Absätze mit \\\\n\\\\n getrennt\\\", \\\"email\\\": \\\"passendste Bewerbungsadresse aus den gefundenen E-Mail-Adressen oder null\\\", \\\"hinweis_ru\\\": \\\"1–2 Sätze auf Russisch, Nikita mit \\\"ты\\\" ansprechen: was er vor dem Absenden prüfen sollte — nur Konkretes aus DIESER Anzeige (eingesetzter Platzhalter, verlangte Unterlagen, Portal-Bewerbung); gibt es nichts Konkretes, leerer String\\\"}\" }, { role: 'user', content: user }] },\n} }];\n"
+      }
+    },
+    {
+      "id": "86f2250a-5c14-598d-9c6c-0ee934bfc28c",
+      "name": "OpenAI Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.openai_request) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "<n8n credential id: OpenAI>",
+          "name": "OpenAi account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "f0561977-d091-5347-90e2-2a6987a3324b",
+      "name": "Brief-Nachricht",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -200
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\n// Письмо в Telegram. Формат строк «Кому:», «Betreff:», «#ref» и разделители ——— читает Route\n// при отправке, поэтому менять его только вместе с Route.\nconst job = $('Brief-Prompt').first().json.job;\nlet o = {};\ntry { o = JSON.parse($input.first().json.choices?.[0]?.message?.content ?? '{}'); } catch (e) { o = {}; }\nif (!o.anschreiben) return [send('❌ Не получилось написать письмо (ошибка OpenAI). Нажми кнопку ещё раз через минуту.')];\n\nconst email = job.emails.includes(String(o.email ?? '').toLowerCase()) ? String(o.email).toLowerCase() : '';\nconst subject = String(o.betreff || `Bewerbung als ${job.title} – Mykyta Rozumnyi`).replace(/\\n/g, ' ');\n// Модель иногда всё равно дописывает прощание — срезаем, подпись ставим сами.\nconst body = String(o.anschreiben).trim()\n  .replace(/\\n+\\s*(mit freundlichen grüßen|viele grüße|beste grüße|freundliche grüße)[\\s\\S]*$/i, '').trim();\nconst letter = body + '\\n\\n' + \"Mit freundlichen Grüßen\\nMax Mustermann\\nmax@example.com\";\nconst text = [\n  `✉️ <b>Anschreiben</b> · ${esc(job.title)} — ${esc(job.firma)}`,\n  email ? `📧 Кому: ${esc(email)}` : '📮 E-mail в вакансии нет — откликайся через сайт/портал, текст скопируй отсюда.',\n  `Betreff: ${esc(subject)}`,\n  `#ref ${esc(job.refnr)}`,\n  '———', esc(letter), '———',\n  o.hinweis_ru ? `💡 ${esc(o.hinweis_ru)}` : '',\n  '✏️ Чтобы поправить — ответь на это сообщение: «короче», «сделай акцент на Python»…',\n].filter(Boolean).join('\\n');\nreturn [send(text, { reply_markup: { inline_keyboard: letterKb(job.refnr, email, job.url) } })];\n"
+      }
+    },
+    {
+      "id": "50297ed3-975d-5211-b25b-c7d160aafa97",
+      "name": "Als abgelehnt",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: job_seen>"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "refnr",
+              "condition": "eq",
+              "keyValue": "={{ $('Route').first().json.refnr }}"
+            }
+          ]
+        },
+        "matchType": "allConditions",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "rejected"
+          }
+        },
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "6a21cf3f-78e9-59e5-a992-d246ec971407",
+      "name": "Abgelehnt-Tasten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nreturn [setKb([[{ text: '❌ Не интересно', callback_data: 'n:' }]])];\n"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "2cb684df-e0cc-5301-b550-c975dbed3e39",
+      "name": "Bestätigen-Tasten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        200
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nif (!R.to) return [send('В этом письме нет адреса для отправки — откликайся через сайт вакансии.')];\nreturn [setKb([\n  [{ text: '✅ Да, отправить на ' + R.to, callback_data: 'S:' + R.refnr }],\n  [{ text: '↩️ Отмена', callback_data: 'c:' + R.refnr }],\n  ...(R.url ? [[{ text: '🔗 Вакансия', url: R.url }]] : []),\n])];\n"
+      }
+    },
+    {
+      "id": "9189b12f-fd13-55cb-9b3c-65390fd8ffcb",
+      "name": "Abbrechen-Tasten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        600
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nreturn [setKb(letterKb(R.refnr, R.to, R.url))];\n"
+      }
+    },
+    {
+      "id": "728374e1-2fcd-58df-9af3-01977e28410b",
+      "name": "Schon gesendet?",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        400
+      ],
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: bewerbungen>"
+        },
+        "options": {},
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "refnr",
+              "condition": "eq",
+              "keyValue": "={{ $('Route').first().json.refnr }}"
+            }
+          ]
+        },
+        "matchType": "allConditions",
+        "returnAll": false,
+        "limit": 1
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "568eef59-d858-5911-981c-97ea13156c5d",
+      "name": "Senden-Tasten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nreturn [setKb([[{ text: '⏳ Отправляю…', callback_data: 'n:' }]])];\n"
+      }
+    },
+    {
+      "id": "1c208e97-b690-5b1b-9af7-0cbb033e3bb6",
+      "name": "Mail vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\n// Последние проверки перед отправкой: адрес, тема, текст и защита от двойного нажатия.\nconst dup = $input.all().some((it) => it.json.refnr === R.refnr && it.json.channel === 'email');\nconst problem = dup ? 'Письмо по этой вакансии уже отправлено — второй раз не шлю.'\n  : !/^[^@\\s]+@[^@\\s]+\\.[a-z]{2,}$/i.test(R.to) ? 'Не нашёл корректный адрес в письме.'\n  : !R.subject ? 'Не нашёл тему письма (строку Betreff).'\n  : R.letter.length < 300 ? 'Текст письма слишком короткий или не найден.' : '';\nreturn [{ json: { ok: !problem, problem, to: R.to, subject: R.subject, letter: R.letter } }];\n"
+      }
+    },
+    {
+      "id": "6aaac943-63ce-5d74-9f67-46ce985f1500",
+      "name": "Mail ok?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "version": 2,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "ok",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "4912722d-2ac0-5b15-bcaf-58b2498fd3bd",
+      "name": "Mail-Problem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        560
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nreturn [send('⛔ ' + esc($input.first().json.problem))];\n"
+      }
+    },
+    {
+      "id": "04aae815-e7f8-547d-a007-a36ed0906bd6",
+      "name": "Lebenslauf laden",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        360
+      ],
+      "parameters": {
+        "operation": "read",
+        "fileSelector": "/root/.n8n-files/Lebenslauf.pdf",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      }
+    },
+    {
+      "id": "c9ef530e-276b-5a7c-8bea-739ffb3d33b0",
+      "name": "E-Mail senden",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        360
+      ],
+      "parameters": {
+        "fromEmail": "Max Mustermann <max@example.com>",
+        "toEmail": "={{ $('Mail vorbereiten').first().json.to }}",
+        "subject": "={{ $('Mail vorbereiten').first().json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $('Mail vorbereiten').first().json.letter }}",
+        "options": {
+          "attachments": "data",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "smtp": {
+          "id": "<n8n credential id: SMTP>",
+          "name": "Gmail SMTP (Nikita)"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "4b6b9609-d5c6-56b7-b035-8df34bdb730e",
+      "name": "Mail-Fehler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        560
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nconst err = $input.first().json.error;\nreturn [send('❌ Письмо НЕ отправлено: ' + esc(err?.message ?? JSON.stringify(err ?? {})).slice(0, 500))];\n"
+      }
+    },
+    {
+      "id": "a042169a-301d-5626-a55f-78e308964e98",
+      "name": "Stelle laden",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: job_seen>"
+        },
+        "options": {},
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "refnr",
+              "condition": "eq",
+              "keyValue": "={{ $('Route').first().json.refnr }}"
+            }
+          ]
+        },
+        "matchType": "allConditions",
+        "returnAll": false,
+        "limit": 1
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "07dbfba8-1a3d-54d4-ba3b-fde925c85bf7",
+      "name": "Bewerbung-Daten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nconst row = $input.all().find((it) => it.json.refnr === R.refnr)?.json ?? {};\nconst viaMail = R.action === 'send';\nreturn [{ json: {\n  refnr: R.refnr,\n  title: row.title || R.head_title,\n  firma: row.firma || R.head_firma || '',\n  url: row.url || R.url,\n  channel: viaMail ? 'email' : 'portal',\n  recipient: viaMail ? R.to : '',\n  subject: viaMail ? R.subject : '',\n  applied_at: $now.setZone('Europe/Berlin').toISO(),\n} }];\n"
+      }
+    },
+    {
+      "id": "dfb633b4-e98a-5b22-a5d7-28698a6dea39",
+      "name": "Bewerbung merken",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2200,
+        300
+      ],
+      "parameters": {
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: bewerbungen>"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "refnr": "={{ $json.refnr }}",
+            "title": "={{ $json.title }}",
+            "firma": "={{ $json.firma }}",
+            "url": "={{ $json.url }}",
+            "channel": "={{ $json.channel }}",
+            "recipient": "={{ $json.recipient }}",
+            "subject": "={{ $json.subject }}",
+            "applied_at": "={{ $json.applied_at }}"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c6ecebf2-d1e4-5ea7-8805-f936cb25c39a",
+      "name": "Als beworben",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        300
+      ],
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: job_seen>"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "refnr",
+              "condition": "eq",
+              "keyValue": "={{ $('Route').first().json.refnr }}"
+            }
+          ]
+        },
+        "matchType": "allConditions",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "status": "applied"
+          }
+        },
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "e02ab220-2878-580a-9d75-41a64fb161f4",
+      "name": "Beworben-Tasten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nconst when = $now.setZone('Europe/Berlin').toFormat('dd.MM HH:mm');\nconst label = R.action === 'send' ? `✅ Отправлено на ${R.to} · ${when}` : `✅ Откликнулся · ${when}`;\nreturn [setKb([[{ text: label, callback_data: 'n:' }], ...(R.url ? [[{ text: '🔗 Вакансия', url: R.url }]] : [])])];\n"
+      },
+      "executeOnce": true
+    },
+    {
+      "id": "69dfbdc8-e370-5ec7-8051-a842d7c7b51b",
+      "name": "Alle Bewerbungen",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        800
+      ],
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: bewerbungen>"
+        },
+        "options": {},
+        "returnAll": true
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "2d263fcf-e971-5d73-ab9d-566993c54f10",
+      "name": "Bewerbungen-Liste",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        800
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\n// Журнал откликов — пригодится для отчёта о поиске работы (Eigenbemühungen) в Arbeitsagentur.\nconst rows = $input.all().map((it) => it.json).filter((r) => r.refnr)\n  .sort((a, b) => String(b.applied_at).localeCompare(String(a.applied_at)));\nif (!rows.length) return [send('📋 Откликов пока нет.')];\nconst fmt = (iso) => (iso ? DateTime.fromISO(iso).setZone('Europe/Berlin').toFormat('dd.MM.yy') : '—');\nconst lines = rows.slice(0, 40).map((r) =>\n  `${fmt(r.applied_at)} · <a href=\"${esc(r.url)}\">${esc(r.title)}</a> — ${esc(r.firma)} · ${r.channel === 'email' ? '📧 ' + esc(r.recipient) : '🌐 портал'}`);\nreturn [send(`📋 <b>Мои отклики: ${rows.length}</b>\\n\\n${lines.join('\\n')}` + (rows.length > 40 ? `\\n…и ещё ${rows.length - 40}` : ''))];\n"
+      }
+    },
+    {
+      "id": "9c19cfdc-c955-535d-9347-2b33c6066613",
+      "name": "Suche starten",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        1000
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://127.0.0.1:5678/webhook/jobhunter-run-<random>",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b70d94c7-da35-5974-8d1c-eb255dbedfe4",
+      "name": "Suche-Antwort",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        1000
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nconst ok = !$input.first().json.error;\nreturn [send(ok ? '🔎 Запустил поиск. Новые вакансии придут через несколько минут.' : '❌ Не смог запустить поиск.')];\n"
+      }
+    },
+    {
+      "id": "79e7b35d-51d9-57dc-8f0d-19f949784958",
+      "name": "Hilfe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        1200
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\nreturn [send([\n  '🤖 <b>Бот поиска работы</b>',\n  'Каждое утро в 07:30 присылаю новые вакансии с оценкой под твоё резюме.',\n  '',\n  'Под вакансией: ✍️ написать Anschreiben · ❌ не интересно',\n  'Под письмом: 📤 отправить (попрошу подтвердить) · 🔄 другой вариант · ✅ я откликнулся',\n  'Ответь на письмо текстом — перепишу с учётом пожелания.',\n  '',\n  '/suche — искать прямо сейчас',\n  '/bewerbungen — список откликов (для отчёта в Arbeitsagentur)',\n].join('\\n'))];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Telegram": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Quittung",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Aktion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Quittung": {
+      "main": [
+        [
+          {
+            "node": "Callback beantworten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aktion": {
+      "main": [
+        [
+          {
+            "node": "Stelle (Details)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Als abgelehnt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bestätigen-Tasten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Senden-Tasten",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Schon gesendet?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Abbrechen-Tasten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stelle laden",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alle Bewerbungen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Suche starten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Hilfe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stelle (Details)": {
+      "main": [
+        [
+          {
+            "node": "Brief-Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brief-Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Brief": {
+      "main": [
+        [
+          {
+            "node": "Brief-Nachricht",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Brief-Nachricht": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Als abgelehnt": {
+      "main": [
+        [
+          {
+            "node": "Abgelehnt-Tasten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Abgelehnt-Tasten": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bestätigen-Tasten": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Senden-Tasten": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schon gesendet?": {
+      "main": [
+        [
+          {
+            "node": "Mail vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mail vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Mail ok?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mail ok?": {
+      "main": [
+        [
+          {
+            "node": "Lebenslauf laden",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mail-Problem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mail-Problem": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lebenslauf laden": {
+      "main": [
+        [
+          {
+            "node": "E-Mail senden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "E-Mail senden": {
+      "main": [
+        [
+          {
+            "node": "Stelle laden",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mail-Fehler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mail-Fehler": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Abbrechen-Tasten": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stelle laden": {
+      "main": [
+        [
+          {
+            "node": "Bewerbung-Daten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bewerbung-Daten": {
+      "main": [
+        [
+          {
+            "node": "Bewerbung merken",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bewerbung merken": {
+      "main": [
+        [
+          {
+            "node": "Als beworben",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Als beworben": {
+      "main": [
+        [
+          {
+            "node": "Beworben-Tasten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Beworben-Tasten": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alle Bewerbungen": {
+      "main": [
+        [
+          {
+            "node": "Bewerbungen-Liste",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bewerbungen-Liste": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suche starten": {
+      "main": [
+        [
+          {
+            "node": "Suche-Antwort",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suche-Antwort": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hilfe": {
+      "main": [
+        [
+          {
+            "node": "Telegram API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin"
+  }
+}
