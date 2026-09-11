@@ -59,7 +59,7 @@
         100
       ],
       "parameters": {
-        "jsCode": "// Единственное место с настройками поиска.\n// Разовый прогон: POST на вебхук с телом {\"days\": 30, \"max_eval\": 90, \"ignore_seen\": true}.\n// ignore_seen — прислать заново и уже виденные вакансии (записи в таблице не удаляются).\nconst ov = $input.first().json.body ?? {};\nconst cfg = {\n  plz: '10115',\n  umkreis_km: 40,\n  homeoffice_min: 80,    // «удалёнка» = хоумофис от 80% времени\n  days: Number(ov.days) || 2,  // вакансии, опубликованные за последние N дней\n  ignore_seen: ov.ignore_seen === true,\n  max_eval: Number(ov.max_eval) || 40,  // потолок оценок ИИ за один прогон\n  min_score: 6,          // ниже — в Telegram не присылаем, только в таблицу\n  model: 'gpt-4o',\n  chat_id: '000000000',\n};\n\n// Подобраны прогоном по живому API за 30 дней (2026-09-11). Выкинуты те, что\n// приносили в основном мусор: Make.com, Zapier, Quereinsteiger IT, Schnittstellen,\n// Integration/Automation Engineer (промышленность и senior), Chatbot.\nconst keywords = [\n  'n8n', 'Prozessautomatisierung', 'KI Automatisierung', 'Workflow Automatisierung',\n  'Low-Code', 'No-Code', 'RPA', 'Prozessdigitalisierung', 'Digitalisierung Prozesse',\n  'Digitalisierungsmanager', 'KI-Manager', 'KI Prozesse', 'Power Automate',\n  'Python Automatisierung', 'Prompt Engineer', 'Business Process Automation',\n];\n\nconst base = 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs';\nconst qs = (o) => Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');\n\nconst out = [];\nfor (const was of keywords) {\n  // angebotsart=1 — только работа (без стажировок, Ausbildung и самозанятости)\n  const common = { was, angebotsart: 1, veroeffentlichtseit: cfg.days, size: 50, page: 1 };\n  out.push({ json: { cfg, was, mode: 'local',\n    url: base + '?' + qs({ ...common, wo: cfg.plz, umkreis: cfg.umkreis_km }) } });\n  out.push({ json: { cfg, was, mode: 'remote',\n    url: base + '?' + qs({ ...common, homeoffice: 'prozentual_' + cfg.homeoffice_min }) } });\n}\nreturn out;\n"
+        "jsCode": "// Единственное место с настройками поиска.\n// Разовый прогон: POST на вебхук с телом {\"days\": 30, \"max_eval\": 90, \"ignore_seen\": true}.\n// ignore_seen — прислать заново и уже виденные вакансии (записи в таблице не удаляются);\n// seen_since: \"2026-09-11T17:39:00+02:00\" — «виденными» считать только оценённые после этого момента.\nconst ov = $input.first().json.body ?? {};\nconst cfg = {\n  plz: '10115',\n  umkreis_km: 40,\n  homeoffice_min: 80,    // «удалёнка» = хоумофис от 80% времени\n  days: Number(ov.days) || 2,  // вакансии, опубликованные за последние N дней\n  ignore_seen: ov.ignore_seen === true,\n  seen_since: ov.seen_since ? String(ov.seen_since) : '',\n  max_eval: Number(ov.max_eval) || 40,  // потолок оценок ИИ за один прогон\n  min_score: 6,          // ниже — в Telegram не присылаем, только в таблицу\n  model: 'gpt-4o',\n  chat_id: '000000000',\n};\n\n// Подобраны прогоном по живому API за 30 дней (2026-09-11). Выкинуты те, что\n// приносили в основном мусор: Make.com, Zapier, Quereinsteiger IT, Schnittstellen,\n// Integration/Automation Engineer (промышленность и senior), Chatbot.\nconst keywords = [\n  'n8n', 'Prozessautomatisierung', 'KI Automatisierung', 'Workflow Automatisierung',\n  'Low-Code', 'No-Code', 'RPA', 'Prozessdigitalisierung', 'Digitalisierung Prozesse',\n  'Digitalisierungsmanager', 'KI-Manager', 'KI Prozesse', 'Power Automate',\n  'Python Automatisierung', 'Prompt Engineer', 'Business Process Automation',\n];\n\nconst base = 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v6/jobs';\nconst qs = (o) => Object.entries(o).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');\n\nconst out = [];\nfor (const was of keywords) {\n  // angebotsart=1 — только работа (без стажировок, Ausbildung и самозанятости)\n  const common = { was, angebotsart: 1, veroeffentlichtseit: cfg.days, size: 50, page: 1 };\n  out.push({ json: { cfg, was, mode: 'local',\n    url: base + '?' + qs({ ...common, wo: cfg.plz, umkreis: cfg.umkreis_km }) } });\n  out.push({ json: { cfg, was, mode: 'remote',\n    url: base + '?' + qs({ ...common, homeoffice: 'prozentual_' + cfg.homeoffice_min }) } });\n}\nreturn out;\n"
       }
     },
     {
@@ -146,7 +146,7 @@
         100
       ],
       "parameters": {
-        "jsCode": "// Оставляем только вакансии, которых ещё нет в таблице job_seen.\nconst { cfg, jobs, stats } = $('Sammeln & Vorfiltern').first().json;\nconst seen = new Set(cfg.ignore_seen ? [] : $input.all().map((it) => it.json.refnr).filter(Boolean));\nconst fresh = jobs.filter((j) => !seen.has(j.refnr));\n\n// Удалёнку показываем первой, потом — самое свежее.\nfresh.sort((a, b) => (a.mode === b.mode ? b.published.localeCompare(a.published) : a.mode === 'remote' ? -1 : 1));\nconst picked = fresh.slice(0, cfg.max_eval);\nconst summary = { ...stats, fresh: fresh.length, evaluated: picked.length };\n\nif (!picked.length) return [{ json: { none: true, cfg, summary } }];\n\nconst b64 = (s) => (typeof btoa === 'function' ? btoa(s) : Buffer.from(s).toString('base64'));\nreturn picked.map((j) => ({ json: { ...j, refnr_b64: b64(j.refnr), cfg, summary } }));\n"
+        "jsCode": "// Оставляем только вакансии, которых ещё нет в таблице job_seen.\nconst { cfg, jobs, stats } = $('Sammeln & Vorfiltern').first().json;\nconst since = cfg.seen_since ? new Date(cfg.seen_since).getTime() : 0;\nconst seen = new Set(cfg.ignore_seen ? [] : $input.all()\n  .filter((it) => !since || new Date(it.json.found_at).getTime() >= since)\n  .map((it) => it.json.refnr).filter(Boolean));\nconst fresh = jobs.filter((j) => !seen.has(j.refnr));\n\n// Удалёнку показываем первой, потом — самое свежее.\nfresh.sort((a, b) => (a.mode === b.mode ? b.published.localeCompare(a.published) : a.mode === 'remote' ? -1 : 1));\nconst picked = fresh.slice(0, cfg.max_eval);\nconst summary = { ...stats, fresh: fresh.length, evaluated: picked.length };\n\nif (!picked.length) return [{ json: { none: true, cfg, summary } }];\n\nconst b64 = (s) => (typeof btoa === 'function' ? btoa(s) : Buffer.from(s).toString('base64'));\nreturn picked.map((j) => ({ json: { ...j, refnr_b64: b64(j.refnr), cfg, summary } }));\n"
       }
     },
     {
@@ -270,7 +270,7 @@
           "batching": {
             "batch": {
               "batchSize": 1,
-              "batchInterval": 6500
+              "batchInterval": 10000
             }
           }
         }
@@ -409,14 +409,14 @@
           "batching": {
             "batch": {
               "batchSize": 1,
-              "batchInterval": 400
+              "batchInterval": 1100
             }
           }
         }
       },
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 1000,
+      "waitBetweenTries": 3000,
       "onError": "continueRegularOutput"
     }
   ],

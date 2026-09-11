@@ -60,7 +60,8 @@ node("Jetzt suchen (Webhook)", "n8n-nodes-base.webhook", 2,
 CONFIG_JS = r"""
 // Единственное место с настройками поиска.
 // Разовый прогон: POST на вебхук с телом {"days": 30, "max_eval": 90, "ignore_seen": true}.
-// ignore_seen — прислать заново и уже виденные вакансии (записи в таблице не удаляются).
+// ignore_seen — прислать заново и уже виденные вакансии (записи в таблице не удаляются);
+// seen_since: "2026-09-11T17:39:00+02:00" — «виденными» считать только оценённые после этого момента.
 const ov = $input.first().json.body ?? {};
 const cfg = {
   plz: '__PLZ__',
@@ -68,6 +69,7 @@ const cfg = {
   homeoffice_min: 80,    // «удалёнка» = хоумофис от 80% времени
   days: Number(ov.days) || 2,  // вакансии, опубликованные за последние N дней
   ignore_seen: ov.ignore_seen === true,
+  seen_since: ov.seen_since ? String(ov.seen_since) : '',
   max_eval: Number(ov.max_eval) || 40,  // потолок оценок ИИ за один прогон
   min_score: 6,          // ниже — в Telegram не присылаем, только в таблицу
   model: 'gpt-4o',
@@ -154,7 +156,10 @@ node("Bekannte Stellen", "n8n-nodes-base.dataTable", 1.1, {
 NEW_JS = r"""
 // Оставляем только вакансии, которых ещё нет в таблице job_seen.
 const { cfg, jobs, stats } = $('Sammeln & Vorfiltern').first().json;
-const seen = new Set(cfg.ignore_seen ? [] : $input.all().map((it) => it.json.refnr).filter(Boolean));
+const since = cfg.seen_since ? new Date(cfg.seen_since).getTime() : 0;
+const seen = new Set(cfg.ignore_seen ? [] : $input.all()
+  .filter((it) => !since || new Date(it.json.found_at).getTime() >= since)
+  .map((it) => it.json.refnr).filter(Boolean));
 const fresh = jobs.filter((j) => !seen.has(j.refnr));
 
 // Удалёнку показываем первой, потом — самое свежее.
@@ -239,7 +244,7 @@ node("KI-Bewertung", "n8n-nodes-base.httpRequest", 4.2, {
     "sendBody": True,
     "specifyBody": "json",
     "jsonBody": "={{ JSON.stringify($json.openai_request) }}",
-    "options": {"timeout": 40000, "batching": {"batch": {"batchSize": 1, "batchInterval": 6500}}},  # лимит OpenAI: 30k TPM на gpt-4o
+    "options": {"timeout": 40000, "batching": {"batch": {"batchSize": 1, "batchInterval": 10000}}},  # лимит OpenAI 30k TPM: ~3.5k токенов × 6/мин
 }, [1980, 0], credentials=CRED_OPENAI, retryOnFail=True, maxTries=3, waitBetweenTries=5000,
    onError="continueRegularOutput")
 
@@ -350,8 +355,8 @@ node("An Telegram", "n8n-nodes-base.httpRequest", 4.2, {
     "sendBody": True,
     "specifyBody": "json",
     "jsonBody": "={{ JSON.stringify($json.body) }}",
-    "options": {"timeout": 8000, "batching": {"batch": {"batchSize": 1, "batchInterval": 400}}},
-}, [2640, -100], retryOnFail=True, maxTries=3, waitBetweenTries=1000, onError="continueRegularOutput")
+    "options": {"timeout": 8000, "batching": {"batch": {"batchSize": 1, "batchInterval": 1100}}},  # Telegram: ≤1 сообщ./с в чат
+}, [2640, -100], retryOnFail=True, maxTries=3, waitBetweenTries=3000, onError="continueRegularOutput")
 
 # --- Связи ------------------------------------------------------------------
 
