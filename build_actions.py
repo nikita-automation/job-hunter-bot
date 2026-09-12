@@ -138,7 +138,7 @@ Regeln:
 - Mitte: 1–2 Projekte aus dem Profil, die am besten zu den Aufgaben passen, mit konkretem Ergebnis, und die Brücke zu den Anforderungen.
 - Den Quereinstieg (Koch → Automatisierung) kurz als Stärke zeigen, wenn es passt (Prozessdenken, Arbeiten unter Zeitdruck, Zuverlässigkeit) — nicht entschuldigen.
 - Verlangt die Anzeige einen Eintrittstermin: "ab sofort". Verlangt sie eine Gehaltsvorstellung: Platzhalter [Gehaltsvorstellung ergänzen].
-- Anrede: Ist eine Ansprechperson genannt, "Sehr geehrte Frau …" bzw. "Sehr geehrter Herr …", sonst "Sehr geehrte Damen und Herren,".
+- Anrede: Nur wenn im Anzeigentext oder im Hinweis des Kandidaten eine Ansprechperson MIT Namen und Anrede steht, "Sehr geehrte Frau …" bzw. "Sehr geehrter Herr …". Namen NIEMALS aus einer E-Mail-Adresse ableiten und Geschlecht nie raten — im Zweifel "Sehr geehrte Damen und Herren,".
 - KEINE Grußformel und keine Signatur am Ende — die werden automatisch angehängt.
 Antworte NUR mit JSON:
 {"betreff": "Bewerbung als <Stellentitel> – Mykyta Rozumnyi", "anschreiben": "Text, Absätze mit \\n\\n getrennt", "email": "passendste Bewerbungsadresse aus den gefundenen E-Mail-Adressen oder null", "hinweis_ru": "1–2 Sätze auf Russisch, Nikita mit \"ты\" ansprechen: was er vor dem Absenden prüfen sollte — nur Konkretes aus DIESER Anzeige (eingesetzter Platzhalter, verlangte Unterlagen, Portal-Bewerbung); gibt es nichts Konkretes, leerer String"}"""
@@ -153,14 +153,20 @@ const ort = (d.stellenlokationen ?? [])[0]?.adresse?.ort ?? '';
 const url = R.url || d.externeURL || `https://www.arbeitsagentur.de/jobsuche/jobdetail/${R.refnr}`;
 const emails = [...new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? []).map((e) => e.toLowerCase()))];
 
+// Адрес для отклика часто скрыт за капчей Arbeitsagentur. Тогда Никита отвечает на письмо
+// строкой с e-mail: берём его как получателя, а не как пожелание по тексту.
+const forced = ((R.instruction ?? '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) ?? [''])[0].toLowerCase();
+const onlyMail = forced && (R.instruction ?? '').replace(forced, '').replace(/[\s,.:;«»"']/gi, '').length === 0;
+if (forced) emails.unshift(forced);
+
 let user = `KANDIDAT:\n${__PROFILE__}\n\nSTELLE:\nTitel: ${title}\nFirma: ${firma}\nOrt: ${ort}\n` +
   `Gefundene E-Mail-Adressen: ${emails.join(', ') || 'keine'}\n\n` +
   (text || '(Beschreibung nicht verfügbar — allgemeiner schreiben, nur Titel und Firma verwenden)');
-if (R.instruction) user += `\n\nBISHERIGES ANSCHREIBEN:\n${R.letter}\n\nÄNDERUNGSWUNSCH DES KANDIDATEN (evtl. auf Russisch): ${R.instruction}\nÜberarbeite das Anschreiben genau so. Alle Regeln gelten weiter.`;
-else if (R.rewrite && R.letter) user += `\n\nBISHERIGES ANSCHREIBEN:\n${R.letter}\n\nSchreibe eine spürbar andere Variante (anderer Einstieg, andere Projektauswahl oder Gewichtung).`;
+if (R.instruction && !onlyMail) user += `\n\nBISHERIGES ANSCHREIBEN:\n${R.letter}\n\nÄNDERUNGSWUNSCH DES KANDIDATEN (evtl. auf Russisch): ${R.instruction}\nÜberarbeite das Anschreiben genau so. Alle Regeln gelten weiter.`;
+else if ((R.rewrite || onlyMail) && R.letter) user += `\n\nBISHERIGES ANSCHREIBEN:\n${R.letter}\n\nSchreibe eine spürbar andere Variante (anderer Einstieg, andere Projektauswahl oder Gewichtung).`;
 
 return [{ json: {
-  job: { refnr: R.refnr, title, firma, url, emails },
+  job: { refnr: R.refnr, title, firma, url, emails: [...new Set(emails)], forced },
   openai_request: { model: 'gpt-4o', temperature: 0.6, max_tokens: 1200, response_format: { type: 'json_object' },
     messages: [{ role: 'system', content: __SYSTEM__ }, { role: 'user', content: user }] },
 } }];
@@ -182,7 +188,7 @@ let o = {};
 try { o = JSON.parse($input.first().json.choices?.[0]?.message?.content ?? '{}'); } catch (e) { o = {}; }
 if (!o.anschreiben) return [send('❌ Не получилось написать письмо (ошибка OpenAI). Нажми кнопку ещё раз через минуту.')];
 
-const email = job.emails.includes(String(o.email ?? '').toLowerCase()) ? String(o.email).toLowerCase() : '';
+const email = job.forced || (job.emails.includes(String(o.email ?? '').toLowerCase()) ? String(o.email).toLowerCase() : '');
 const subject = String(o.betreff || `Bewerbung als ${job.title} – Mykyta Rozumnyi`).replace(/\n/g, ' ');
 // Модель иногда всё равно дописывает прощание — срезаем, подпись ставим сами.
 const body = String(o.anschreiben).trim()
@@ -195,7 +201,8 @@ const text = [
   `#ref ${esc(job.refnr)}`,
   '———', esc(letter), '———',
   o.hinweis_ru ? `💡 ${esc(o.hinweis_ru)}` : '',
-  '✏️ Чтобы поправить — ответь на это сообщение: «короче», «сделай акцент на Python»…',
+  email ? '✏️ Чтобы поправить — ответь на это сообщение: «короче», «сделай акцент на Python»…'
+        : '✏️ Ответь на это сообщение: текстом — поправлю письмо; e-mail — добавлю кнопку отправки (можно с именем: «huzun@firma.de, Frau Hülya Uzun»).',
 ].filter(Boolean).join('\n');
 return [send(text, { reply_markup: { inline_keyboard: letterKb(job.refnr, email, job.url) } })];
 """.replace("__SIGNATURE__", js_str(SIGNATURE)), [1320, -200])
