@@ -76,7 +76,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.body) }}",
         "options": {
-          "timeout": 8000
+          "timeout": 25000
         }
       },
       "retryOnFail": true,
@@ -333,7 +333,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.body) }}",
         "options": {
-          "timeout": 8000
+          "timeout": 25000
         }
       },
       "retryOnFail": true,

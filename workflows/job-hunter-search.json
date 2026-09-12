@@ -405,7 +405,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.body) }}",
         "options": {
-          "timeout": 8000,
+          "timeout": 25000,
           "batching": {
             "batch": {
               "batchSize": 1,
@@ -415,7 +415,7 @@
         }
       },
       "retryOnFail": true,
-      "maxTries": 3,
+      "maxTries": 4,
       "waitBetweenTries": 3000,
       "onError": "continueRegularOutput"
     }

@@ -70,7 +70,7 @@ class Workflow:
 
     def tg(self, name, pos, batching=None, **extra):
         """HTTP-узел Bot API: вход — {method, body}."""
-        options = {"timeout": 8000}
+        options = {"timeout": 25000}  # Telegram изредка отвечает дольше 8 с — на 8000 терялись сообщения
         if batching:
             options["batching"] = {"batch": batching}
         return self.node(name, "n8n-nodes-base.httpRequest", 4.2, {

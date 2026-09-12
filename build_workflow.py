@@ -355,8 +355,8 @@ node("An Telegram", "n8n-nodes-base.httpRequest", 4.2, {
     "sendBody": True,
     "specifyBody": "json",
     "jsonBody": "={{ JSON.stringify($json.body) }}",
-    "options": {"timeout": 8000, "batching": {"batch": {"batchSize": 1, "batchInterval": 1100}}},  # Telegram: ≤1 сообщ./с в чат
-}, [2640, -100], retryOnFail=True, maxTries=3, waitBetweenTries=3000, onError="continueRegularOutput")
+    "options": {"timeout": 25000, "batching": {"batch": {"batchSize": 1, "batchInterval": 1100}}},  # Telegram: ≤1 сообщ./с в чат
+}, [2640, -100], retryOnFail=True, maxTries=4, waitBetweenTries=3000, onError="continueRegularOutput")
 
 # --- Связи ------------------------------------------------------------------
 
