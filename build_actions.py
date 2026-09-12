@@ -144,29 +144,61 @@ wf.tg("Telegram API", [2860, 400])
 # --- ✍️ Anschreiben -------------------------------------------------------------
 
 wf.node("Stelle (Details)", "n8n-nodes-base.httpRequest", 4.2, {
-    "url": "=https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails/{{ $json.refnr_b64 }}",
-    "sendHeaders": True, "headerParameters": BA_HEADERS, "options": {"timeout": 10000},
-}, [660, -200], retryOnFail=True, maxTries=2, waitBetweenTries=2000, onError="continueRegularOutput")
+    # $json здесь — запись о событии из дедупликации, поэтому идентификатор берём у Route.
+    "url": "=https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails/{{ $('Route').first().json.refnr_b64 }}",
+    "sendHeaders": True, "headerParameters": BA_HEADERS, "options": {"timeout": 20000},
+}, [660, -200], retryOnFail=True, maxTries=4, waitBetweenTries=4000, onError="continueRegularOutput")
 
-LETTER_SYSTEM = """Du schreibst ein Anschreiben für eine E-Mail-Bewerbung auf Deutsch für den Kandidaten.
-Regeln:
-- Verwende NUR Fakten aus dem Profil. Nichts erfinden: keine Jahre Erfahrung, keine Tools, Abschlüsse, Kunden oder Zahlen, die nicht im Profil stehen. Englisch nicht besser darstellen als A2.
-- 170–260 Wörter, 3–4 kurze Absätze. Natürlicher, selbstbewusster, aber bescheidener Ton. Keine Floskeln wie "hiermit bewerbe ich mich", "mit großem Interesse", "teamfähig und motiviert", "dynamisches Team", "reizt mich besonders", "bewiesen, wie effektiv", "Vielen Dank für die Berücksichtigung". Lieber konkret als werbend.
-- Einstieg: konkreter Bezug auf die Firma oder eine Aufgabe aus der Anzeige.
-- Mitte: 1–2 Projekte aus dem Profil, die am besten zu den Aufgaben passen, mit konkretem Ergebnis, und die Brücke zu den Anforderungen.
-- Den Quereinstieg (Koch → Automatisierung) kurz als Stärke zeigen, wenn es passt (Prozessdenken, Arbeiten unter Zeitdruck, Zuverlässigkeit) — nicht entschuldigen.
-- Verlangt die Anzeige einen Eintrittstermin: "ab sofort".
-- Verlangt die Anzeige eine Gehaltsvorstellung: nenne selbst eine konkrete Zahl — kein Platzhalter, keine Rückfrage. Nennt die Anzeige eine Gehaltsspanne, nimm das untere Drittel; nennt sie keine, nimm 48.000 € brutto pro Jahr (Junior/Quereinstieg in NRW). Ein kurzer Satz am Ende als Verhandlungsbasis, z. B. "Meine Gehaltsvorstellung liegt bei 48.000 € brutto pro Jahr, verhandelbar je nach Aufgabenzuschnitt." Fragt die Anzeige nicht danach, schreibe nichts zum Gehalt.
+LETTER_SYSTEM = """Du schreibst das Anschreiben für eine E-Mail-Bewerbung auf Deutsch — in der Stimme des Kandidaten, nicht in der eines Sprachmodells.
+
+MASSSTAB: Ein Personaler soll nicht auf den Gedanken kommen, dass eine KI das geschrieben hat. Lieber schlicht und konkret als rund und werbend.
+
+VERBOTEN
+- Marketingsprache der Anzeige zurückspiegeln ("die Digitalisierung aktiv mitgestalten", "innovatives Umfeld", "dynamisches Team").
+- Floskeln: "hiermit bewerbe ich mich", "mit großem Interesse", "teamfähig und motiviert", "reizt mich besonders", "Vielen Dank für die Berücksichtigung", "Ich freue mich darauf, meine Kenntnisse einzubringen".
+- Leersätze, die nur eine Erfahrung bewerten ("Diese Erfahrung hat mir gezeigt, wie wichtig …"). Jeder Satz muss eine neue Information tragen.
+- Adjektiv-Inflation ("äußerst spannend", "erheblich", "maßgeschneidert", "umfangreich") und Nominalstil ("die Durchführung der Optimierung"). Nimm Verben.
+- Behauptungen ohne Beleg ("ich arbeite strukturiert"). Stattdessen etwas nennen, woraus das folgt.
+- Die Gastronomie-Vergangenheit des Kandidaten erwähnen (ausdrücklicher Wunsch).
+
+PFLICHT
+- Höchstens 200 Wörter, drei Absätze. Einer der Absätze ist höchstens zwei Zeilen lang.
+- Ungleichmäßiger Rhythmus: mindestens ein Satz unter acht Wörtern, kein Absatz aus lauter gleich langen Sätzen.
+- Mindestens zwei konkrete Angaben aus dem Profil: Zahl, Werkzeug, Zeitraum oder Ergebnis (z. B. "~70 Belege pro Tag", "seit Juni 2026", "n8n auf eigenem VPS").
+- Genau ein ehrlicher Satz zu einer Lücke, wenn die Anzeige etwas verlangt, was im Profil fehlt — sachlich, ohne Entschuldigung, mit dem, was stattdessen da ist ("Mit der Power Platform habe ich nicht gearbeitet; dieselben Abläufe habe ich in n8n gebaut.").
+- Schluss: ein konkreter nächster Schritt ("Ab sofort verfügbar, ein Gespräch geht auch kurzfristig."), keine Dankesformel.
+- Nur Fakten aus dem Profil. Nichts erfinden: keine Jahre, Tools, Abschlüsse, Kunden oder Zahlen, die dort nicht stehen. Englisch nie besser darstellen als A2.
+
+ERLAUBTE PERSÖNLICHE DETAILS — höchstens eines pro Brief, nur wenn es zur Stelle passt:
+- Die tägliche Videoreihe auf Deutsch über Automatisierung, seit über 70 Tagen ohne Lücke.
+- Die eigene Video-Pipeline, die er nach einer Kostenrechnung wieder abgeschaltet hat: der manuelle Weg war rund achtmal günstiger. (Zeigt, dass er rechnet, statt Technik um ihrer selbst willen zu bauen.)
+- Deutsch von null auf C1 (Zertifikat März 2026, 95 %).
+- Bei technischen Stellen: dass diese Bewerbung aus seinem eigenen Job-Bot kommt, der Stellen sucht, bewertet und Anschreiben vorbereitet.
+
+WEITERE REGELN
+- Einstieg: ein konkreter Bezug auf die Aufgabe oder das Unternehmen — keine Begrüßungsfloskel über die Branche.
+- Mitte: das Projekt aus dem Profil, das der Stelle am nächsten kommt, mit Ergebnis in Zahlen; danach die Brücke zur Aufgabe.
 - Anrede: Nur wenn im Anzeigentext oder im Hinweis des Kandidaten eine Ansprechperson MIT Namen und Anrede steht, "Sehr geehrte Frau …" bzw. "Sehr geehrter Herr …". Namen NIEMALS aus einer E-Mail-Adresse ableiten und Geschlecht nie raten — im Zweifel "Sehr geehrte Damen und Herren,".
+- Verlangt die Anzeige einen Eintrittstermin: "ab sofort".
+- Verlangt die Anzeige eine Gehaltsvorstellung: nenne selbst eine konkrete Zahl — kein Platzhalter, keine Rückfrage. Nennt die Anzeige eine Gehaltsspanne, nimm das untere Drittel; nennt sie keine, nimm 48.000 € brutto pro Jahr (Junior/Quereinstieg in NRW). Ein kurzer Satz als Verhandlungsbasis. Fragt die Anzeige nicht danach, schreibe nichts zum Gehalt.
 - KEINE Grußformel und keine Signatur am Ende — die werden automatisch angehängt.
+
+TONBEISPIEL (nur Ton und Rhythmus, Inhalte NICHT übernehmen):
+"Sehr geehrte Damen und Herren,
+Ihre Anzeige nennt Workflows, Formulare und Dashboards als Alltag. Genau das baue ich seit Juni 2026 freiberuflich: Für einen Lieferdienst in Kyjiw läuft ein System, das täglich rund 70 Buchhaltungsbelege erzeugt, verschickt und in ein Tagesregister schreibt — vorher mehrere Stunden Excel pro Tag.
+Als Werkzeug nutze ich n8n auf einem eigenen Linux-Server, dazu Python für die Teile, die über Klicken hinausgehen. Projekterfahrung im klassischen Sinn habe ich nicht; ich habe bisher jedes Projekt selbst geschnitten, abgestimmt und dokumentiert.
+Ab sofort verfügbar, ein Gespräch geht auch kurzfristig."
+
 Antworte NUR mit JSON:
-{"betreff": "Bewerbung als <Stellentitel> – Mykyta Rozumnyi", "anschreiben": "Text, Absätze mit \\n\\n getrennt", "email": "passendste Bewerbungsadresse aus den gefundenen E-Mail-Adressen oder null", "hinweis_ru": "1–2 Sätze auf Russisch, Nikita mit \"ты\" ansprechen: was er vor dem Absenden prüfen sollte — nur Konkretes aus DIESER Anzeige (eingesetzter Platzhalter, verlangte Unterlagen, Portal-Bewerbung); gibt es nichts Konkretes, leerer String"}"""
+{"betreff": "Bewerbung als <Stellentitel> – Mykyta Rozumnyi", "anschreiben": "Text, Absätze mit \\n\\n getrennt", "email": "passendste Bewerbungsadresse aus den gefundenen E-Mail-Adressen oder null", "hinweis_ru": "1–2 Sätze auf Russisch, Nikita mit \"ты\" ansprechen: was er vor dem Absenden prüfen sollte — nur Konkretes aus DIESER Anzeige; gibt es nichts Konkretes, leerer String"}"""
 
 jsnode("Brief-Prompt", r"""
 // Промпт для письма: профиль + вакансия (+ пожелание Никиты при переписывании).
 const d = $input.first().json ?? {};
 const text = String(d.stellenangebotsBeschreibung ?? '').slice(0, 6000);
 const title = d.stellenangebotsTitel || R.head_title || '(Titel unbekannt)';
+// API der BA antwortet manchmal mit 403 — dann schreibt das Modell blind, ohne Anzeigentext.
+const blind = !text;
 const firma = d.firma ?? '';
 const ort = (d.stellenlokationen ?? [])[0]?.adresse?.ort ?? '';
 const url = R.url || d.externeURL || `https://www.arbeitsagentur.de/jobsuche/jobdetail/${R.refnr}`;
@@ -187,7 +219,7 @@ if (R.instruction && !onlyMail) user += `\n\nBISHERIGES ANSCHREIBEN:\n${R.letter
 else if ((R.rewrite || onlyMail) && R.letter) user += `\n\nBISHERIGES ANSCHREIBEN:\n${R.letter}\n\nSchreibe eine spürbar andere Variante (anderer Einstieg, andere Projektauswahl oder Gewichtung).`;
 
 return [{ json: {
-  job: { refnr: R.refnr, title, firma, url, emails: [...new Set(emails)], forced },
+  job: { refnr: R.refnr, title, firma, url, emails: [...new Set(emails)], forced, blind },
   openai_request: { model: 'gpt-4o', temperature: 0.6, max_tokens: 1200, response_format: { type: 'json_object' },
     messages: [{ role: 'system', content: __SYSTEM__ }, { role: 'user', content: user }] },
 } }];
@@ -218,6 +250,7 @@ const body = String(o.anschreiben).trim()
   .replace(/\n+\s*(mit freundlichen grüßen|viele grüße|beste grüße|freundliche grüße)[\s\S]*$/i, '').trim();
 const letter = body + '\n\n' + __SIGNATURE__;
 const text = [
+  job.blind ? '⚠️ <b>Текст вакансии не загрузился</b> (API Arbeitsagentur ответил ошибкой) — письмо общее. Лучше нажми 🔄 через пару минут.' : '',
   `✉️ <b>Anschreiben</b> · ${esc(job.title)} — ${esc(job.firma)}`,
   email ? `📧 Кому: ${esc(email)}` : '📮 E-mail в вакансии нет — откликайся через сайт/портал, текст скопируй отсюда.',
   `Betreff: ${esc(subject)}`,
