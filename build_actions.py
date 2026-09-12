@@ -11,7 +11,7 @@
 Письмо уходит ТОЛЬКО после двух нажатий Никиты (📤 и «Да, отправить»).
 """
 from common import (CHAT_ID, CRED_OPENAI, CRED_SMTP, CRED_TG, CV_PATH, MAIL_FROM, OUT_DIR, PROFILE,
-                    SEARCH_WEBHOOK, SIGNATURE, TABLE_APPLIED, TABLE_SEEN, Workflow, js_str)
+                    SEARCH_WEBHOOK, SIGNATURE, TABLE_APPLIED, TABLE_EVENTS, TABLE_SEEN, Workflow, js_str)
 
 OUT = OUT_DIR / "job-hunter-actions.json"
 wf = Workflow("Job Hunter: Aktionen", "0d7a4e2c-8b1f-4f3a-a9c6-5e2b7d1c9f44")
@@ -41,10 +41,10 @@ def jsnode(name, body, pos, **kw):
     return wf.code(name, HELPERS + body, pos, **kw)
 
 
-def table_get(name, table, key_expr, pos, return_all=False):
+def table_get(name, table, key_expr, pos, return_all=False, key="refnr"):
     params = {"operation": "get", "dataTableId": {"__rl": True, "mode": "id", "value": table}, "options": {}}
     if key_expr:
-        params.update({"filters": {"conditions": [{"keyName": "refnr", "condition": "eq", "keyValue": key_expr}]},
+        params.update({"filters": {"conditions": [{"keyName": key, "condition": "eq", "keyValue": key_expr}]},
                        "matchType": "allConditions"})
     params.update({"returnAll": True} if return_all else {"returnAll": False, "limit": 1})
     return wf.node(name, "n8n-nodes-base.dataTable", 1.1, params, pos, alwaysOutputData=True, executeOnce=True)
@@ -88,6 +88,8 @@ if (u.callback_query) {
 }
 
 if (r.chat_id !== OWNER) r = { action: 'ignore' };
+// Telegram повторяет апдейт, если воркфлоу отвечает слишком долго — иначе письмо уходит дважды.
+r.event_key = String(u.update_id ?? '') + ':' + String(u.callback_query?.id ?? u.message?.message_id ?? '');
 if (r.refnr) r.refnr_b64 = b64(r.refnr);
 
 // Данные письма берём из текста уже присланного сообщения с Anschreiben.
@@ -112,12 +114,28 @@ return [{ json: { method: 'answerCallbackQuery', body: { callback_query_id: r.cb
 """, [440, 160])
 wf.tg("Callback beantworten", [660, 160])
 
+table_get("Ereignis prüfen", TABLE_EVENTS, "={{ $('Route').first().json.event_key }}", [440, 560], key="event_key")
+
+jsnode("Nur einmal", r"""
+// Повтор того же апдейта (Telegram шлёт его снова, если ответа долго нет) — дальше не пускаем.
+const seen = $input.all().some((it) => it.json.event_key === R.event_key);
+if (seen || R.action === 'ignore') return [];
+return [{ json: { event_key: R.event_key, ts: $now.toISO() } }];
+""", [660, 560])
+
+wf.node("Ereignis merken", "n8n-nodes-base.dataTable", 1.1, {
+    "operation": "insert", "dataTableId": {"__rl": True, "mode": "id", "value": TABLE_EVENTS},
+    "columns": {"mappingMode": "defineBelow", "value": {
+        "event_key": "={{ $json.event_key }}", "ts": "={{ $json.ts }}"}},
+    "options": {},
+}, [880, 560])
+
 ACTIONS = ["write", "reject", "confirm_send", "send", "cancel_send", "applied", "list", "search", "help"]
 wf.node("Aktion", "n8n-nodes-base.switch", 3.2, {"rules": {"values": [
     {"conditions": {"options": {"caseSensitive": True, "version": 2, "typeValidation": "strict"},
                     "combinator": "and",
                     "conditions": [{"id": a, "operator": {"type": "string", "operation": "equals"},
-                                    "leftValue": "={{ $json.action }}", "rightValue": a}]},
+                                    "leftValue": "={{ $('Route').first().json.action }}", "rightValue": a}]},
      "renameOutput": True, "outputKey": a} for a in ACTIONS]}, "options": {}}, [440, 400])
 
 # Один общий выход в Bot API для всех веток.
@@ -371,7 +389,10 @@ return [send([
 wf.link("Telegram", "Route")
 wf.link("Route", "Quittung")
 wf.link("Quittung", "Callback beantworten")
-wf.link("Route", "Aktion")
+wf.link("Route", "Ereignis prüfen")
+wf.link("Ereignis prüfen", "Nur einmal")
+wf.link("Nur einmal", "Ereignis merken")
+wf.link("Ereignis merken", "Aktion")
 out = {a: i for i, a in enumerate(ACTIONS)}
 wf.link("Aktion", "Stelle (Details)", out["write"])
 wf.link("Stelle (Details)", "Brief-Prompt")

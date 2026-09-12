@@ -35,7 +35,7 @@
         400
       ],
       "parameters": {
-        "jsCode": "// Входящий апдейт Telegram → одно действие. Чужие чаты игнорируем.\nconst OWNER = '000000000';\nconst u = $input.first().json;\nconst b64 = (s) => (typeof btoa === 'function' ? btoa(s) : Buffer.from(s).toString('base64'));\nconst urlOf = (m) => ((m?.reply_markup?.inline_keyboard ?? []).flat().find((b) => b.url) ?? {}).url ?? '';\nlet r = { action: 'ignore' };\n\nif (u.callback_query) {\n  const cq = u.callback_query;\n  const data = String(cq.data ?? '');\n  const i = data.indexOf(':');\n  const k = i > 0 ? data.slice(0, i) : data;\n  const map = { w: 'write', r: 'write', x: 'reject', s: 'confirm_send', S: 'send', c: 'cancel_send', a: 'applied' };\n  const tips = { write: '✍️ Пишу письмо, ~20 секунд…', reject: 'Скрыл', confirm_send: 'Проверь адрес и подтверди',\n                 send: '📤 Отправляю…', cancel_send: 'Отменено', applied: '✅ Записал в отклики' };\n  r = { action: map[k] ?? 'noop', rewrite: k === 'r', refnr: i > 0 ? data.slice(i + 1) : '',\n        chat_id: String(cq.message?.chat?.id ?? ''), msg_id: cq.message?.message_id,\n        msg_text: cq.message?.text ?? '', url: urlOf(cq.message), cb_id: cq.id, cb_text: tips[map[k]] ?? '' };\n} else if (u.message) {\n  const m = u.message;\n  const text = String(m.text ?? '').trim();\n  const rep = m.reply_to_message;\n  const ref = ((rep?.text ?? '').match(/#ref\\s+(\\S+)/) ?? [])[1];\n  const base = { chat_id: String(m.chat?.id ?? '') };\n  if (ref && text) r = { ...base, action: 'write', refnr: ref, instruction: text, msg_text: rep.text, url: urlOf(rep) };\n  else if (/^\\/bewerbungen/i.test(text)) r = { ...base, action: 'list' };\n  else if (/^\\/suche/i.test(text)) r = { ...base, action: 'search' };\n  else r = { ...base, action: 'help' };\n}\n\nif (r.chat_id !== OWNER) r = { action: 'ignore' };\nif (r.refnr) r.refnr_b64 = b64(r.refnr);\n\n// Данные письма берём из текста уже присланного сообщения с Anschreiben.\nconst t = r.msg_text ?? '';\nr.to = (t.match(/Кому:\\s*(\\S+@\\S+)/) ?? [])[1] ?? '';\nr.subject = ((t.match(/Betreff:\\s*(.+)/) ?? [])[1] ?? '').trim();\nconst parts = t.split('———');\nr.letter = parts.length >= 3 ? parts[1].trim() : '';\nconst head = t.split('\\n')[0] ?? '';\nconst hm = head.match(/Anschreiben · (.+) — (.+)$/);\nr.head_title = ((hm ?? head.match(/\\d+\\/10 · (.+)$/) ?? [])[1] ?? '').trim();\nr.head_firma = (hm?.[2] ?? '').trim();\nreturn [{ json: r }];\n"
+        "jsCode": "// Входящий апдейт Telegram → одно действие. Чужие чаты игнорируем.\nconst OWNER = '000000000';\nconst u = $input.first().json;\nconst b64 = (s) => (typeof btoa === 'function' ? btoa(s) : Buffer.from(s).toString('base64'));\nconst urlOf = (m) => ((m?.reply_markup?.inline_keyboard ?? []).flat().find((b) => b.url) ?? {}).url ?? '';\nlet r = { action: 'ignore' };\n\nif (u.callback_query) {\n  const cq = u.callback_query;\n  const data = String(cq.data ?? '');\n  const i = data.indexOf(':');\n  const k = i > 0 ? data.slice(0, i) : data;\n  const map = { w: 'write', r: 'write', x: 'reject', s: 'confirm_send', S: 'send', c: 'cancel_send', a: 'applied' };\n  const tips = { write: '✍️ Пишу письмо, ~20 секунд…', reject: 'Скрыл', confirm_send: 'Проверь адрес и подтверди',\n                 send: '📤 Отправляю…', cancel_send: 'Отменено', applied: '✅ Записал в отклики' };\n  r = { action: map[k] ?? 'noop', rewrite: k === 'r', refnr: i > 0 ? data.slice(i + 1) : '',\n        chat_id: String(cq.message?.chat?.id ?? ''), msg_id: cq.message?.message_id,\n        msg_text: cq.message?.text ?? '', url: urlOf(cq.message), cb_id: cq.id, cb_text: tips[map[k]] ?? '' };\n} else if (u.message) {\n  const m = u.message;\n  const text = String(m.text ?? '').trim();\n  const rep = m.reply_to_message;\n  const ref = ((rep?.text ?? '').match(/#ref\\s+(\\S+)/) ?? [])[1];\n  const base = { chat_id: String(m.chat?.id ?? '') };\n  if (ref && text) r = { ...base, action: 'write', refnr: ref, instruction: text, msg_text: rep.text, url: urlOf(rep) };\n  else if (/^\\/bewerbungen/i.test(text)) r = { ...base, action: 'list' };\n  else if (/^\\/suche/i.test(text)) r = { ...base, action: 'search' };\n  else r = { ...base, action: 'help' };\n}\n\nif (r.chat_id !== OWNER) r = { action: 'ignore' };\n// Telegram повторяет апдейт, если воркфлоу отвечает слишком долго — иначе письмо уходит дважды.\nr.event_key = String(u.update_id ?? '') + ':' + String(u.callback_query?.id ?? u.message?.message_id ?? '');\nif (r.refnr) r.refnr_b64 = b64(r.refnr);\n\n// Данные письма берём из текста уже присланного сообщения с Anschreiben.\nconst t = r.msg_text ?? '';\nr.to = (t.match(/Кому:\\s*(\\S+@\\S+)/) ?? [])[1] ?? '';\nr.subject = ((t.match(/Betreff:\\s*(.+)/) ?? [])[1] ?? '').trim();\nconst parts = t.split('———');\nr.letter = parts.length >= 3 ? parts[1].trim() : '';\nconst head = t.split('\\n')[0] ?? '';\nconst hm = head.match(/Anschreiben · (.+) — (.+)$/);\nr.head_title = ((hm ?? head.match(/\\d+\\/10 · (.+)$/) ?? [])[1] ?? '').trim();\nr.head_firma = (hm?.[2] ?? '').trim();\nreturn [{ json: r }];\n"
       }
     },
     {
@@ -85,6 +85,78 @@
       "onError": "continueRegularOutput"
     },
     {
+      "id": "f3bcb8c8-604a-575b-9ef3-efa3059fa8aa",
+      "name": "Ereignis prüfen",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        560
+      ],
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: handled_events>"
+        },
+        "options": {},
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "event_key",
+              "condition": "eq",
+              "keyValue": "={{ $('Route').first().json.event_key }}"
+            }
+          ]
+        },
+        "matchType": "allConditions",
+        "returnAll": false,
+        "limit": 1
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "id": "8ceaf2fe-8425-522d-a5eb-cb3cf4e1c2ff",
+      "name": "Nur einmal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        560
+      ],
+      "parameters": {
+        "jsCode": "const R = $('Route').first().json;\nconst esc = (t) => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst send = (text, extra = {}) => ({ json: { method: 'sendMessage', body: {\n  chat_id: R.chat_id, text: String(text).slice(0, 4000), parse_mode: 'HTML', disable_web_page_preview: true, ...extra } } });\nconst setKb = (inline_keyboard) => ({ json: { method: 'editMessageReplyMarkup', body: {\n  chat_id: R.chat_id, message_id: R.msg_id, reply_markup: { inline_keyboard } } } });\nconst letterKb = (refnr, email, url) => [\n  ...(email ? [[{ text: '📤 Отправить на ' + email, callback_data: 's:' + refnr }]] : []),\n  [{ text: '🔄 Другой вариант', callback_data: 'r:' + refnr }, { text: '✅ Я откликнулся', callback_data: 'a:' + refnr }],\n  ...(url ? [[{ text: '🔗 Вакансия', url }]] : []),\n];\n\n// Повтор того же апдейта (Telegram шлёт его снова, если ответа долго нет) — дальше не пускаем.\nconst seen = $input.all().some((it) => it.json.event_key === R.event_key);\nif (seen || R.action === 'ignore') return [];\nreturn [{ json: { event_key: R.event_key, ts: $now.toISO() } }];\n"
+      }
+    },
+    {
+      "id": "60e98e8d-7337-5956-ac2f-3c68bd7fb4d1",
+      "name": "Ereignis merken",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        560
+      ],
+      "parameters": {
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<n8n data table id: handled_events>"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event_key": "={{ $json.event_key }}",
+            "ts": "={{ $json.ts }}"
+          }
+        },
+        "options": {}
+      }
+    },
+    {
       "id": "67bc0d3e-f8a0-51f1-9d22-80a95b407025",
       "name": "Aktion",
       "type": "n8n-nodes-base.switch",
@@ -111,7 +183,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "write"
                   }
                 ]
@@ -134,7 +206,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "reject"
                   }
                 ]
@@ -157,7 +229,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "confirm_send"
                   }
                 ]
@@ -180,7 +252,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "send"
                   }
                 ]
@@ -203,7 +275,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "cancel_send"
                   }
                 ]
@@ -226,7 +298,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "applied"
                   }
                 ]
@@ -249,7 +321,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "list"
                   }
                 ]
@@ -272,7 +344,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "search"
                   }
                 ]
@@ -295,7 +367,7 @@
                       "type": "string",
                       "operation": "equals"
                     },
-                    "leftValue": "={{ $json.action }}",
+                    "leftValue": "={{ $('Route').first().json.action }}",
                     "rightValue": "help"
                   }
                 ]
@@ -905,7 +977,7 @@
             "index": 0
           },
           {
-            "node": "Aktion",
+            "node": "Ereignis prüfen",
             "type": "main",
             "index": 0
           }
@@ -917,6 +989,39 @@
         [
           {
             "node": "Callback beantworten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ereignis prüfen": {
+      "main": [
+        [
+          {
+            "node": "Nur einmal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nur einmal": {
+      "main": [
+        [
+          {
+            "node": "Ereignis merken",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ereignis merken": {
+      "main": [
+        [
+          {
+            "node": "Aktion",
             "type": "main",
             "index": 0
           }
