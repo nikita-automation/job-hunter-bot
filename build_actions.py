@@ -137,7 +137,8 @@ Regeln:
 - Einstieg: konkreter Bezug auf die Firma oder eine Aufgabe aus der Anzeige.
 - Mitte: 1–2 Projekte aus dem Profil, die am besten zu den Aufgaben passen, mit konkretem Ergebnis, und die Brücke zu den Anforderungen.
 - Den Quereinstieg (Koch → Automatisierung) kurz als Stärke zeigen, wenn es passt (Prozessdenken, Arbeiten unter Zeitdruck, Zuverlässigkeit) — nicht entschuldigen.
-- Verlangt die Anzeige einen Eintrittstermin: "ab sofort". Verlangt sie eine Gehaltsvorstellung: Platzhalter [Gehaltsvorstellung ergänzen].
+- Verlangt die Anzeige einen Eintrittstermin: "ab sofort".
+- Verlangt die Anzeige eine Gehaltsvorstellung: nenne selbst eine konkrete Zahl — kein Platzhalter, keine Rückfrage. Nennt die Anzeige eine Gehaltsspanne, nimm das untere Drittel; nennt sie keine, nimm 48.000 € brutto pro Jahr (Junior/Quereinstieg in NRW). Ein kurzer Satz am Ende als Verhandlungsbasis, z. B. "Meine Gehaltsvorstellung liegt bei 48.000 € brutto pro Jahr, verhandelbar je nach Aufgabenzuschnitt." Fragt die Anzeige nicht danach, schreibe nichts zum Gehalt.
 - Anrede: Nur wenn im Anzeigentext oder im Hinweis des Kandidaten eine Ansprechperson MIT Namen und Anrede steht, "Sehr geehrte Frau …" bzw. "Sehr geehrter Herr …". Namen NIEMALS aus einer E-Mail-Adresse ableiten und Geschlecht nie raten — im Zweifel "Sehr geehrte Damen und Herren,".
 - KEINE Grußformel und keine Signatur am Ende — die werden automatisch angehängt.
 Antworte NUR mit JSON:
@@ -151,6 +152,7 @@ const title = d.stellenangebotsTitel || R.head_title || '(Titel unbekannt)';
 const firma = d.firma ?? '';
 const ort = (d.stellenlokationen ?? [])[0]?.adresse?.ort ?? '';
 const url = R.url || d.externeURL || `https://www.arbeitsagentur.de/jobsuche/jobdetail/${R.refnr}`;
+const salary = d.gehaltsspanneVon ? `${d.gehaltsspanneVon}–${d.gehaltsspanneBis ?? '?'} € pro Jahr` : '';
 const emails = [...new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? []).map((e) => e.toLowerCase()))];
 
 // Адрес для отклика часто скрыт за капчей Arbeitsagentur. Тогда Никита отвечает на письмо
@@ -160,6 +162,7 @@ const onlyMail = forced && (R.instruction ?? '').replace(forced, '').replace(/[\
 if (forced) emails.unshift(forced);
 
 let user = `KANDIDAT:\n${__PROFILE__}\n\nSTELLE:\nTitel: ${title}\nFirma: ${firma}\nOrt: ${ort}\n` +
+  `Gehaltsangabe der Anzeige: ${salary || 'keine'}\n` +
   `Gefundene E-Mail-Adressen: ${emails.join(', ') || 'keine'}\n\n` +
   (text || '(Beschreibung nicht verfügbar — allgemeiner schreiben, nur Titel und Firma verwenden)');
 if (R.instruction && !onlyMail) user += `\n\nBISHERIGES ANSCHREIBEN:\n${R.letter}\n\nÄNDERUNGSWUNSCH DES KANDIDATEN (evtl. auf Russisch): ${R.instruction}\nÜberarbeite das Anschreiben genau so. Alle Regeln gelten weiter.`;
@@ -188,7 +191,9 @@ let o = {};
 try { o = JSON.parse($input.first().json.choices?.[0]?.message?.content ?? '{}'); } catch (e) { o = {}; }
 if (!o.anschreiben) return [send('❌ Не получилось написать письмо (ошибка OpenAI). Нажми кнопку ещё раз через минуту.')];
 
-const email = job.forced || (job.emails.includes(String(o.email ?? '').toLowerCase()) ? String(o.email).toLowerCase() : '');
+// Модель отдаёт адрес не всегда; если в тексте вакансии он ровно один — берём его.
+const picked = job.emails.includes(String(o.email ?? '').toLowerCase()) ? String(o.email).toLowerCase() : '';
+const email = job.forced || picked || (job.emails.length === 1 ? job.emails[0] : '');
 const subject = String(o.betreff || `Bewerbung als ${job.title} – Mykyta Rozumnyi`).replace(/\n/g, ' ');
 // Модель иногда всё равно дописывает прощание — срезаем, подпись ставим сами.
 const body = String(o.anschreiben).trim()

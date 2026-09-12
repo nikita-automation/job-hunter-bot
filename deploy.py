@@ -15,7 +15,7 @@ ACTIVATE = "--activate" in sys.argv
 ONLY = [a for a in sys.argv[1:] if not a.startswith("--")]
 
 REMOTE = r'''
-import json, socket, sqlite3, sys, urllib.error, urllib.request
+import json, socket, sqlite3, sys, time, urllib.error, urllib.request
 key = sqlite3.connect("/root/.n8n/database.sqlite").execute(
     "select apiKey from user_api_keys where label='Caude code'").fetchone()[0]
 def api(method, path, body=None, tries=1):
@@ -44,8 +44,17 @@ else:
 if sys.argv[2] == "1":
     # Telegram Trigger при включении регистрирует вебхук через пул соединений n8n,
     # и первая попытка иногда висит на «мёртвом» keep-alive — повтор проходит.
-    api("POST", f"/workflows/{wid}/activate", tries=3)
-    print("active:", api("GET", f"/workflows/{wid}")["active"], flush=True)
+    # n8n бывает откатывает активацию после таймаута, отвечая при этом 200,
+    # поэтому проверяем состояние ещё раз спустя паузу.
+    for attempt in range(3):
+        api("POST", f"/workflows/{wid}/activate", tries=3)
+        time.sleep(5)
+        if api("GET", f"/workflows/{wid}")["active"]:
+            print("active: True", flush=True)
+            break
+        print("активация откатилась — повтор", flush=True)
+    else:
+        sys.exit("НЕ ВКЛЮЧИЛСЯ: " + wid)
 '''
 
 SSH_OPTS = ["-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
