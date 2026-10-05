@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  public-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Rebuild the public workflows from the generators
+        run: |
+          python build_workflow.py --public
+          python build_actions.py --public
+
+      - name: Committed workflows must match the generators
+        run: git diff --exit-code -- workflows
+
+      - name: No personal data or secrets in tracked files
+        run: |
+          if git grep -InE '\+49[ 0-9]{8,}|[0-9]{8,10}:[A-Za-z0-9_-]{35}|sk-[A-Za-z0-9]{20,}' -- . ':!.github'; then
+            echo "Found something that looks like a phone number, bot token or API key."
+            exit 1
+          fi
